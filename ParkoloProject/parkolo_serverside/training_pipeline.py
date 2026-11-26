@@ -713,11 +713,11 @@ def run_full_training_suite(
     with model_lock:
         base_val = base_model.val(
             data=data_yaml, split="val", imgsz=TRAIN_IMGSZ, batch=TRAIN_BATCH, device=device,
-            project=str(runs_dir), name="val_base", exist_ok=True, plots=False, verbose=False
+            workers=0, project=str(runs_dir), name="val_base", exist_ok=True, plots=False, verbose=False
         )
         base_test = base_model.val(
             data=data_yaml, split="test", imgsz=TRAIN_IMGSZ, batch=TRAIN_BATCH, device=device,
-            project=str(runs_dir), name="test_base", exist_ok=True, plots=False, verbose=False
+            workers=0, project=str(runs_dir), name="test_base", exist_ok=True, plots=False, verbose=False
         )
     base_val_m = _extract_val_metrics(base_val)
     base_test_m = _extract_val_metrics(base_test)
@@ -744,6 +744,7 @@ def run_full_training_suite(
             hsv_s=0.4,
             hsv_v=0.3,
             seed=RANDOM_SEED,
+            workers=0,
             project=str(runs_dir),
             name="frozen_adamw",
             exist_ok=True,
@@ -755,11 +756,11 @@ def run_full_training_suite(
     with model_lock:
         a_val_m = _extract_val_metrics(
             eval_a.val(data=data_yaml, split="val", imgsz=TRAIN_IMGSZ, batch=TRAIN_BATCH, device=device,
-                       project=str(runs_dir), name="val_frozen_adamw", exist_ok=True, plots=False, verbose=False)
+                       workers=0, project=str(runs_dir), name="val_frozen_adamw", exist_ok=True, plots=False, verbose=False)
         )
         a_test_m = _extract_val_metrics(
             eval_a.val(data=data_yaml, split="test", imgsz=TRAIN_IMGSZ, batch=TRAIN_BATCH, device=device,
-                       project=str(runs_dir), name="test_frozen_adamw", exist_ok=True, plots=False, verbose=False)
+                       workers=0, project=str(runs_dir), name="test_frozen_adamw", exist_ok=True, plots=False, verbose=False)
         )
     curves_a = _parse_results_csv(runs_dir / "frozen_adamw" / "results.csv")
 
@@ -786,6 +787,7 @@ def run_full_training_suite(
             hsv_s=0.4,
             hsv_v=0.3,
             seed=RANDOM_SEED,
+            workers=0,
             project=str(runs_dir),
             name="finetune_sgd",
             exist_ok=True,
@@ -797,7 +799,7 @@ def run_full_training_suite(
     with model_lock:
         b_val_m = _extract_val_metrics(
             eval_b.val(data=data_yaml, split="val", imgsz=TRAIN_IMGSZ, batch=TRAIN_BATCH, device=device,
-                       project=str(runs_dir), name="val_finetune_sgd", exist_ok=True, plots=False, verbose=False)
+                       workers=0, project=str(runs_dir), name="val_finetune_sgd", exist_ok=True, plots=False, verbose=False)
         )
         b_test_m = _extract_val_metrics(
             eval_b.val(data=data_yaml, split="test", imgsz=TRAIN_IMGSZ, batch=TRAIN_BATCH, device=device,
@@ -828,6 +830,10 @@ def run_full_training_suite(
     _plot_confusion_matrix(winner_test_m.get("confusion_matrix_3x3"), winner_name, report_dir / "confusion_matrix.png")
     err_summary = _plot_error_analysis(dataset_dir, winner_model, device, model_lock, report_dir / "error_analysis.png")
     _plot_interpretability_saliency(dataset_dir, winner_model, device, model_lock, report_dir / "interpretability_saliency.png")
+
+    # Ideiglenes tanítási súlyok és képek törlése, hogy ne foglalják a tárhelyet
+    shutil.rmtree(runs_dir, ignore_errors=True)
+    shutil.rmtree(dataset_dir, ignore_errors=True)
 
     # Overfitting / Underfitting diagnosztika az utolsó epoch alapján
     def _loss_gap(rows: list[dict[str, float]]) -> dict[str, float] | None:
