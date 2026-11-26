@@ -47,8 +47,7 @@ class ParkingAppGUI:
         self.server_host = tk.StringVar(value=DEFAULT_SERVER_HOST)
         self.server_port = tk.StringVar(value=str(DEFAULT_SERVER_PORT))
 
-        self.train_output_video = os.path.abspath("train_output.mp4")
-        self.test_output_video = os.path.abspath("test_output.mp4")
+        self.test_output_video = os.path.abspath("output.mp4")
 
         self.is_processing = False
         self.session_id: Optional[str] = None
@@ -56,7 +55,6 @@ class ParkingAppGUI:
         self._is_checking_server = False
         self._health_check_seq = 0
         self._server_config_seq = 0
-        self._train_result_ready = False
         self._test_result_ready = False
         self._is_closing = False
         self._ui_lock = threading.Lock()
@@ -257,15 +255,6 @@ class ParkingAppGUI:
             command=self.start_training,
         )
         self.btn_train.pack(side=tk.LEFT, padx=(0, 10))
-
-        self.btn_view_train_result = ttk.Button(
-            action_row1,
-            text="🎬 Eredmény Videó Megnézése",
-            style="Secondary.TButton",
-            command=lambda: self.open_video(self.train_output_video),
-        )
-        self.btn_view_train_result.pack(side=tk.LEFT)
-        self.btn_view_train_result.state(["disabled"])
 
         self.train_status_lbl = ttk.Label(
             self.train_card,
@@ -619,12 +608,10 @@ class ParkingAppGUI:
             self.train_status_lbl.config(text=f"Kiválasztva: {os.path.basename(path)}")
             if changed and (
                 self.session_id is not None
-                or self._train_result_ready
                 or self._test_result_ready
             ):
                 self.session_id = None
                 self._active_server_target = None
-                self._train_result_ready = False
                 self._test_result_ready = False
                 self.test_status_lbl.config(text="Státusz: Várakozás a tanítás befejezésére...")
                 self._refresh_button_states()
@@ -750,7 +737,6 @@ class ParkingAppGUI:
         self._is_checking_server = False
         self.session_id = None
         self._active_server_target = None
-        self._train_result_ready = False
         self._test_result_ready = False
 
         self._set_ui_busy(True)
@@ -760,7 +746,6 @@ class ParkingAppGUI:
         self.progress_lbl.config(text="Tanító videó feltöltése a távoli AI szerverre...")
         self.stats_lbl.config(text="Élő állapot: Kapcsolódás a távoli AI szerverhez...")
 
-        output_path = self.train_output_video
         server_target = (client.host, client.port)
         base_url = client.base_url
         config_seq = self._server_config_seq
@@ -772,7 +757,7 @@ class ParkingAppGUI:
 
                 result = client.run_training(
                     video_path=video,
-                    output_path=output_path,
+                    output_path=None,
                     progress_callback=on_progress,
                 )
                 self._safe_after(self._on_training_done, result, server_target, base_url, config_seq)
@@ -802,8 +787,6 @@ class ParkingAppGUI:
         target_changed = (
             config_seq is not None and self._did_server_target_change(server_target, config_seq)
         )
-        self.train_output_video = result["output_path"]
-        self._train_result_ready = True
 
         if target_changed:
             self.session_id = None
@@ -1035,7 +1018,6 @@ class ParkingAppGUI:
         if step == "train":
             self.session_id = None
             self._active_server_target = None
-            self._train_result_ready = False
             self.train_status_lbl.config(text="❌ Hiba történt a tanítás során.")
             self.test_status_lbl.config(
                 text=(
@@ -1077,7 +1059,6 @@ class ParkingAppGUI:
             for btn in (
                 self.btn_train,
                 self.btn_test,
-                self.btn_view_train_result,
                 self.btn_view_test_result,
                 self.btn_browse_train,
                 self.btn_view_train_orig,
@@ -1114,9 +1095,6 @@ class ParkingAppGUI:
 
         self.btn_check_server.state(["disabled"] if self._is_checking_server else ["!disabled"])
         self.btn_test.state(["!disabled"] if bool(self.session_id) else ["disabled"])
-
-        train_ready = self._train_result_ready and os.path.isfile(self.train_output_video)
-        self.btn_view_train_result.state(["!disabled"] if train_ready else ["disabled"])
 
         test_ready = self._test_result_ready and os.path.isfile(self.test_output_video)
         self.btn_view_test_result.state(["!disabled"] if test_ready else ["disabled"])

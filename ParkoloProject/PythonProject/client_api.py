@@ -201,7 +201,11 @@ class ParkingRemoteClient:
         return data
 
     @staticmethod
-    def _validate_io_paths(video_path: Any, output_path: Any) -> tuple[str, str]:
+    def _validate_io_paths(
+        video_path: Any,
+        output_path: Any,
+        require_output: bool = True,
+    ) -> tuple[str, Optional[str]]:
         if not isinstance(video_path, str) or not video_path.strip():
             raise RemoteClientError("A bemeneti videófájl elérési útja üres vagy érvénytelen.")
         cleaned_video = video_path.strip()
@@ -215,6 +219,8 @@ class ParkingRemoteClient:
                 f"Nem sikerült ellenőrizni a videófájl méretét ({cleaned_video}): {exc}"
             ) from exc
 
+        if output_path is None and not require_output:
+            return cleaned_video, None
         if not isinstance(output_path, str) or not output_path.strip():
             raise RemoteClientError("A kimeneti videófájl elérési útja üres vagy érvénytelen.")
         cleaned_output = output_path.strip()
@@ -297,11 +303,13 @@ class ParkingRemoteClient:
     def run_training(
         self,
         video_path: str,
-        output_path: str,
+        output_path: Optional[str] = None,
         progress_callback: Optional[ProgressCallback] = None,
     ) -> Dict[str, Any]:
-        """Feltölti a tanító videót (`POST /api/train`), követi a feldolgozást és letölti az eredményvideót."""
-        clean_video, clean_output = self._validate_io_paths(video_path, output_path)
+        """Feltölti a tanító videót (`POST /api/train`), követi a feldolgozást és opcionálisan letölti a videót."""
+        clean_video, clean_output = self._validate_io_paths(
+            video_path, output_path, require_output=False
+        )
         mime_type = mimetypes.guess_type(clean_video)[0] or "video/mp4"
         url = f"{self.base_url}/api/train"
 
@@ -341,8 +349,10 @@ class ParkingRemoteClient:
             raise ServerResponseError("Hiányzó 'session_id' mező a /api/train válaszából.")
 
         job_data = self._poll_job(clean_job_id, progress_callback)
-        video_url = self._resolve_video_url(clean_job_id, job_data.get("result_video_url"))
-        saved_path = self._download_video(video_url, clean_output)
+        saved_path: Optional[str] = None
+        if clean_output is not None:
+            video_url = self._resolve_video_url(clean_job_id, job_data.get("result_video_url"))
+            saved_path = self._download_video(video_url, clean_output)
         return self._build_result_dict(job_data, fallback_session_id=session_id.strip(), saved_path=saved_path)
 
     def run_analysis(
@@ -621,7 +631,7 @@ class ParkingRemoteClient:
     def _build_result_dict(
         job_data: Dict[str, Any],
         fallback_session_id: str,
-        saved_path: str,
+        saved_path: Optional[str],
     ) -> Dict[str, Any]:
         stats = ParkingRemoteClient._validate_stats(job_data.get("stats"))
         raw_sid = job_data.get("session_id")
