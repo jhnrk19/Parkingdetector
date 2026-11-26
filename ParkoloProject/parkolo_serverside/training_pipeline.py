@@ -702,17 +702,22 @@ def run_full_training_suite(
     )
     data_yaml = ds_stats["data_yaml"]
 
-    from ultralytics import YOLO
+    runs_dir.mkdir(parents=True, exist_ok=True)
+
+    from ultralytics import YOLO, settings
+    settings.update({"runs_dir": str(runs_dir), "datasets_dir": str(dataset_dir.parent)})
 
     # 1. Baseline: Előre tanított YOLOv8x-OBB kiértékelése a Test halmazon
     if progress_cb:
         progress_cb(55, "Baseline modell (előre tanított YOLOv8x-OBB) kiértékelése…")
     with model_lock:
         base_val = base_model.val(
-            data=data_yaml, split="val", imgsz=TRAIN_IMGSZ, batch=TRAIN_BATCH, device=device, plots=False, verbose=False
+            data=data_yaml, split="val", imgsz=TRAIN_IMGSZ, batch=TRAIN_BATCH, device=device,
+            project=str(runs_dir), name="val_base", exist_ok=True, plots=False, verbose=False
         )
         base_test = base_model.val(
-            data=data_yaml, split="test", imgsz=TRAIN_IMGSZ, batch=TRAIN_BATCH, device=device, plots=False, verbose=False
+            data=data_yaml, split="test", imgsz=TRAIN_IMGSZ, batch=TRAIN_BATCH, device=device,
+            project=str(runs_dir), name="test_base", exist_ok=True, plots=False, verbose=False
         )
     base_val_m = _extract_val_metrics(base_val)
     base_test_m = _extract_val_metrics(base_test)
@@ -749,10 +754,12 @@ def run_full_training_suite(
     eval_a = YOLO(str(best_a_path)) if best_a_path.is_file() else model_a
     with model_lock:
         a_val_m = _extract_val_metrics(
-            eval_a.val(data=data_yaml, split="val", imgsz=TRAIN_IMGSZ, batch=TRAIN_BATCH, device=device, plots=False, verbose=False)
+            eval_a.val(data=data_yaml, split="val", imgsz=TRAIN_IMGSZ, batch=TRAIN_BATCH, device=device,
+                       project=str(runs_dir), name="val_frozen_adamw", exist_ok=True, plots=False, verbose=False)
         )
         a_test_m = _extract_val_metrics(
-            eval_a.val(data=data_yaml, split="test", imgsz=TRAIN_IMGSZ, batch=TRAIN_BATCH, device=device, plots=False, verbose=False)
+            eval_a.val(data=data_yaml, split="test", imgsz=TRAIN_IMGSZ, batch=TRAIN_BATCH, device=device,
+                       project=str(runs_dir), name="test_frozen_adamw", exist_ok=True, plots=False, verbose=False)
         )
     curves_a = _parse_results_csv(runs_dir / "frozen_adamw" / "results.csv")
 
@@ -789,10 +796,12 @@ def run_full_training_suite(
     eval_b = YOLO(str(best_b_path)) if best_b_path.is_file() else model_b
     with model_lock:
         b_val_m = _extract_val_metrics(
-            eval_b.val(data=data_yaml, split="val", imgsz=TRAIN_IMGSZ, batch=TRAIN_BATCH, device=device, plots=False, verbose=False)
+            eval_b.val(data=data_yaml, split="val", imgsz=TRAIN_IMGSZ, batch=TRAIN_BATCH, device=device,
+                       project=str(runs_dir), name="val_finetune_sgd", exist_ok=True, plots=False, verbose=False)
         )
         b_test_m = _extract_val_metrics(
-            eval_b.val(data=data_yaml, split="test", imgsz=TRAIN_IMGSZ, batch=TRAIN_BATCH, device=device, plots=False, verbose=False)
+            eval_b.val(data=data_yaml, split="test", imgsz=TRAIN_IMGSZ, batch=TRAIN_BATCH, device=device,
+                       project=str(runs_dir), name="test_finetune_sgd", exist_ok=True, plots=False, verbose=False)
         )
     curves_b = _parse_results_csv(runs_dir / "finetune_sgd" / "results.csv")
 
