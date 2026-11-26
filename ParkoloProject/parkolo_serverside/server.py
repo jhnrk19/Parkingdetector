@@ -28,6 +28,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+import training_pipeline as tp
 import vision_pipeline as vp
 
 MODEL_NAME = "yolov8x-obb.pt"
@@ -206,10 +207,20 @@ def run_job(job_id: str, src: Path) -> None:
         t0 = time.time()
         out = src.parent / ("train_output.mp4" if mode == "train" else "test_output.mp4")
         detector = vp.Detector(state["model"], state["device"], model_lock)
-        res = vp.process_video(src, out, detector, profile, progress, log=lambda m: log(f"{job_id[:8]} {m}"),
-                               debug_dir=src.parent / "debug" if DEBUG_IMAGES else None)
+        if mode == "train":
+            def _vp_prog(**kw: object) -> None:
+                if "progress" in kw and isinstance(kw["progress"], (int, float)):
+                    kw["progress"] = min(38, int(float(kw["progress"]) * 0.38))
+                progress(**kw)
+            res = vp.process_video(src, out, detector, profile, _vp_prog, log=lambda m: log(f"{job_id[:8]} {m}"),
+                                   debug_dir=src.parent / "debug" if DEBUG_IMAGES else None)
+        else:
+            res = vp.process_video(src, out, detector, profile, progress, log=lambda m: log(f"{job_id[:8]} {m}"),
+                                   debug_dir=src.parent / "debug" if DEBUG_IMAGES else None)
         if not out.is_file() or out.stat().st_size <= 0:
             raise RuntimeError("A kimeneti videó nem jött létre.")
+        report_url: str | None = None
+        report_dir_str: str | None = None
         if mode == "train":
             prof = res["profile"]
             doc = {"session_id": sid, "created": time.time(), "profile": json.loads(prof.to_json())}
@@ -218,6 +229,22 @@ def run_job(job_id: str, src: Path) -> None:
             os.replace(tmp, SESSIONS_DIR / f"{sid}.json")
             with lock:
                 sessions[sid] = {"status": "ready", "profile": prof, "created": doc["created"]}
+
+            log(f"{job_id[:8]} train: mélytanulási adat-előkészítés, transfer learning és riport indul…")
+            tp.run_full_training_suite(
+                video_path=src,
+                job_dir=src.parent,
+                base_model_path=state["model_path"] or find_model(),
+                base_model=state["model"],
+                device=state["device"],
+                model_lock=model_lock,
+                progress_cb=lambda pct, m: (
+                    progress(status="processing", progress=pct, message=m),
+                    log(f"{job_id[:8]} [{pct}%] {m}"),
+                ),
+            )
+            report_dir_str = str(src.parent / "report")
+            report_url = f"/api/jobs/{job_id}/report"
         total, occ = int(res["total_slots"]), int(res["final_occupied"])
         stats = {"total_slots": total, "final_occupied": occ, "final_free": total - occ, "frames_processed": int(res["frames_processed"])}
         msg = "Feldolgozás sikeresen befejezve."
@@ -227,7 +254,8 @@ def run_job(job_id: str, src: Path) -> None:
             msg += " " + " ".join(res["notes"])
         with lock:   # a videó már a végleges helyén van: csak ezután lesz "completed"
             job.update(status="completed", progress=100, current_frame=stats["frames_processed"], total_frames=stats["frames_processed"],
-                       occupied=occ, free=total - occ, stats=stats, message=msg, result_video_url=f"/api/jobs/{job_id}/video", error=None, _video=str(out))
+                       occupied=occ, free=total - occ, stats=stats, message=msg, result_video_url=f"/api/jobs/{job_id}/video",
+                       report_url=report_url, error=None, _video=str(out), _report_dir=report_dir_str)
         log(f"{job_id[:8]} {mode}: kész {time.time() - t0:.0f} mp alatt – összes {total}, foglalt {occ}, szabad {total - occ} "
             f"(csíkpár {res['sources']['stripes']}, pótolt {res['sources']['filled']}, járműből {res['sources']['vehicle']})")
     except Exception as e:  # noqa: BLE001
@@ -310,6 +338,38 @@ def job_video(job_id: str):
     name = "train_output.mp4" if mode == "train" else "test_output.mp4"
     # a FileResponse a fájl pontos méretét adja Content-Length-ként, és darabokban küldi
     return FileResponse(path, media_type="video/mp4", headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@app.get("/api/jobs/{job_id}/report")
+def job_report(job_id: str):
+    with lock:
+        job = jobs.get(job_id)
+        if job is None:
+            return error(404, "A megadott job_id nem található.")
+        ready, report_dir = job["status"] == "completed", job.get("_report_dir")
+    if not ready or not report_dir:
+        return error(409, "A tanítási riport még nem készült el vagy nem tanító feladatról van szó.")
+    report_file = Path(report_dir) / "training_report.json"
+    if not report_file.is_file():
+        return error(404, "A tanítási riport fájl nem található.")
+    return JSONResponse(json.loads(report_file.read_text(encoding="utf-8")))
+
+
+@app.get("/api/jobs/{job_id}/report/{image_name}")
+def job_report_image(job_id: str, image_name: str):
+    if "/" in image_name or "\\" in image_name or ".." in image_name or not image_name.endswith(".png"):
+        return error(400, "Érvénytelen képfájlnév.")
+    with lock:
+        job = jobs.get(job_id)
+        if job is None:
+            return error(404, "A megadott job_id nem található.")
+        ready, report_dir = job["status"] == "completed", job.get("_report_dir")
+    if not ready or not report_dir:
+        return error(409, "A tanítási riport még nem készült el.")
+    img_file = (Path(report_dir) / image_name).resolve()
+    if img_file.parent != Path(report_dir).resolve() or not img_file.is_file():
+        return error(404, "A kért ábra nem található.")
+    return FileResponse(img_file, media_type="image/png")
 
 
 @app.get("/api/sessions/{session_id}")

@@ -8,6 +8,7 @@ Kétlépéses hálózati munkafolyamat (távoli AI szerver feldolgozással):
    a feldolgozott videó és az Összes / Foglalt / Szabad statisztikák ellenőrzése.
 """
 
+import base64
 import os
 import queue
 import sys
@@ -51,6 +52,7 @@ class ParkingAppGUI:
 
         self.is_processing = False
         self.session_id: Optional[str] = None
+        self.train_job_id: Optional[str] = None
         self._active_server_target: Optional[tuple[str, int]] = None
         self._is_checking_server = False
         self._health_check_seq = 0
@@ -255,6 +257,15 @@ class ParkingAppGUI:
             command=self.start_training,
         )
         self.btn_train.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.btn_view_report = ttk.Button(
+            action_row1,
+            text="📊 Tanítási Riport és Ábrák",
+            style="Secondary.TButton",
+            command=self.open_training_report,
+        )
+        self.btn_view_report.pack(side=tk.LEFT)
+        self.btn_view_report.state(["disabled"])
 
         self.train_status_lbl = ttk.Label(
             self.train_card,
@@ -736,6 +747,7 @@ class ParkingAppGUI:
         self._health_check_seq += 1
         self._is_checking_server = False
         self.session_id = None
+        self.train_job_id = None
         self._active_server_target = None
         self._test_result_ready = False
 
@@ -790,9 +802,11 @@ class ParkingAppGUI:
 
         if target_changed:
             self.session_id = None
+            self.train_job_id = None
             self._active_server_target = None
         else:
             self.session_id = result["session_id"]
+            self.train_job_id = result.get("job_id")
             self._active_server_target = server_target
 
         self._set_ui_busy(False)
@@ -1054,10 +1068,151 @@ class ParkingAppGUI:
             f"Megjegyzés: Ez az alkalmazás vékony kliens, helyi AI-feldolgozás nem futtatható.",
         )
 
+    def open_training_report(self):
+        if not self.train_job_id:
+            messagebox.showinfo("Nincs riport", "Először futtasd le az 1. lépést (tanítást)!")
+            return
+        client = self._build_validated_client()
+        if client is None:
+            return
+        job_id = self.train_job_id
+
+        win = tk.Toplevel(self.root)
+        win.title("Mélytanulási Tanítási Riport és Ábrák")
+        win.geometry("1040x740")
+        win.configure(bg="#0f172a")
+        win._photo_refs = []  # referencia megtartása GC ellen
+
+        loading_lbl = ttk.Label(
+            win,
+            text="Tanítási riport és ábrák letöltése a távoli AI szerverről...",
+            style="Muted.TLabel",
+        )
+        loading_lbl.pack(pady=14)
+
+        def _fetch():
+            try:
+                report = client.get_training_report(job_id)
+                images_data: dict[str, bytes] = {}
+                for img_name in report.get("images", []):
+                    try:
+                        images_data[img_name] = client.get_report_image_bytes(job_id, img_name)
+                    except Exception:
+                        pass
+                self._safe_after(lambda: _render(report, images_data))
+            except Exception as exc:
+                self._safe_after(lambda: _render_error(str(exc)))
+
+        def _render_error(err: str):
+            if not win.winfo_exists():
+                return
+            loading_lbl.config(text=f"Nem sikerült betölteni a riportot: {err}")
+
+        def _render(report: dict, images_data: dict[str, bytes]):
+            if not win.winfo_exists():
+                return
+            loading_lbl.destroy()
+
+            nb = ttk.Notebook(win)
+            nb.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+            # 1. Összefoglaló fül
+            summary_frame = tk.Frame(nb, bg="#0f172a")
+            nb.add(summary_frame, text="Összefoglaló & Metrikák")
+            txt = tk.Text(
+                summary_frame,
+                bg="#1e293b",
+                fg="#f8fafc",
+                font=("Consolas", 10),
+                wrap=tk.WORD,
+                padx=14,
+                pady=12,
+                borderwidth=0,
+            )
+            scroll = ttk.Scrollbar(summary_frame, orient="vertical", command=txt.yview)
+            txt.configure(yscrollcommand=scroll.set)
+            scroll.pack(side=tk.RIGHT, fill=tk.Y)
+            txt.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+            ds = report.get("dataset", {})
+            splits = ds.get("splits", {})
+            hp = report.get("hyperparameters", {})
+            test_m = report.get("test_metrics", {})
+            ov = report.get("overfitting_check", {})
+            err_a = report.get("error_analysis", {})
+            rai = report.get("responsible_ai", {})
+
+            lines = [
+                f"=== PROBLÉMA ÉS KÖRNYEZET ===",
+                f"Feladat: {report.get('problem', {}).get('task')}",
+                f"Győztes modell (Validation mAP50-95 alapján): {report.get('winner_model')}",
+                f"Eszköz: {report.get('device')} | Futási idő: {report.get('duration_sec')} mp | Seed: {report.get('seed')}",
+                "",
+                "=== ADATKÉSZLET ÉS TISZTÍTÁS ===",
+                f"Mintavételezett képkockák: {ds.get('sampled_candidates')} | Megtartva: {ds.get('kept_frames')}",
+                f"Szűrt: elmosódott={ds.get('removed_blur')}, duplikált={ds.get('removed_duplicates')}, outlier/üres={ds.get('removed_outliers')}",
+                f"Train: {splits.get('train')} | Val: {splits.get('val')} | Test: {splits.get('test')}",
+                f"Felosztás indoklása: {report.get('split_justification')}",
+                "",
+                "=== HIPERPARAMÉTEREK ===",
+                f"Loss: {hp.get('loss_function')}",
+                f"Epochs: {hp.get('epochs')} | Imgsz: {hp.get('imgsz')} | Batch: {hp.get('batch_size')} | Early stopping: {hp.get('early_stopping_patience')}",
+                f"Augmentáció: {hp.get('augmentation')}",
+                f"Variánsok: {hp.get('variants')}",
+                "",
+                "=== TEST HALMAZ EREDMÉNYEK ===",
+            ]
+            for m_name, m_vals in test_m.items():
+                lines.append(
+                    f"- {m_name}: P={m_vals.get('precision')} | R={m_vals.get('recall')} | "
+                    f"F1={m_vals.get('f1')} | mAP@50={m_vals.get('map50')} | mAP@50-95={m_vals.get('map50_95')}"
+                )
+            lines += [
+                "",
+                "=== OVERFITTING / LOSS GAP ELLENŐRZÉS ===",
+                f"{ov}",
+                "",
+                "=== HIBAELEMZÉS ===",
+                f"Vizsgált test képkockák: {err_a.get('inspected_test_frames')} | TP={err_a.get('tp')}, FP={err_a.get('fp')}, FN={err_a.get('fn')}",
+                *[f"- {c}" for c in err_a.get("typical_causes", [])],
+                "",
+                "=== INTERPRETÁLHATÓSÁG ÉS FELELŐSSÉGTELJES MI ===",
+                f"Módszer: {rai.get('interpretability')}",
+                f"Adatvédelem / etika: {rai.get('privacy_ethics')}",
+                *[f"Korlát: {lim}" for lim in rai.get("limitations", [])],
+            ]
+            txt.insert("1.0", "\n".join(lines))
+            txt.configure(state="disabled")
+
+            tab_titles = {
+                "dataset_summary.png": "Adatkészlet & Tisztítás",
+                "learning_curves.png": "Tanulási görbék",
+                "model_comparison.png": "Modellek összevetése",
+                "confusion_matrix.png": "Confusion Matrix",
+                "error_analysis.png": "Hibaelemzés",
+                "interpretability_saliency.png": "Interpretálhatóság (Saliency)",
+            }
+            for fname, title in tab_titles.items():
+                raw = images_data.get(fname)
+                if not raw:
+                    continue
+                tab = tk.Frame(nb, bg="#0f172a")
+                nb.add(tab, text=title)
+                photo = tk.PhotoImage(data=base64.b64encode(raw).decode("ascii"))
+                if photo.width() > 980:
+                    factor = max(2, (photo.width() + 979) // 980)
+                    photo = photo.subsample(factor, factor)
+                win._photo_refs.append(photo)
+                lbl = tk.Label(tab, image=photo, bg="#0f172a")
+                lbl.pack(expand=True, padx=8, pady=8)
+
+        threading.Thread(target=_fetch, daemon=True).start()
+
     def _refresh_button_states(self):
         if self.is_processing:
             for btn in (
                 self.btn_train,
+                self.btn_view_report,
                 self.btn_test,
                 self.btn_view_test_result,
                 self.btn_browse_train,
@@ -1094,6 +1249,7 @@ class ParkingAppGUI:
             btn.state(["!disabled"])
 
         self.btn_check_server.state(["disabled"] if self._is_checking_server else ["!disabled"])
+        self.btn_view_report.state(["!disabled"] if bool(self.train_job_id) else ["disabled"])
         self.btn_test.state(["!disabled"] if bool(self.session_id) else ["disabled"])
 
         test_ready = self._test_result_ready and os.path.isfile(self.test_output_video)

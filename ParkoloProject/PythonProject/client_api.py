@@ -353,7 +353,12 @@ class ParkingRemoteClient:
         if clean_output is not None:
             video_url = self._resolve_video_url(clean_job_id, job_data.get("result_video_url"))
             saved_path = self._download_video(video_url, clean_output)
-        return self._build_result_dict(job_data, fallback_session_id=session_id.strip(), saved_path=saved_path)
+        return self._build_result_dict(
+            job_data,
+            fallback_session_id=session_id.strip(),
+            saved_path=saved_path,
+            job_id=clean_job_id,
+        )
 
     def run_analysis(
         self,
@@ -627,20 +632,51 @@ class ParkingRemoteClient:
                 except OSError:
                     pass
 
+    def get_training_report(self, job_id: str) -> Dict[str, Any]:
+        """Lekéri a tanítási riport JSON-t a távoli AI szerverről."""
+        clean_job_id = self._validate_job_id(job_id)
+        url = f"{self.base_url}/api/jobs/{clean_job_id}/report"
+        try:
+            response = requests.get(url, timeout=self.timeout, allow_redirects=False)
+        except requests.RequestException as exc:
+            raise self._map_request_exception(exc, "GET /api/jobs/.../report") from exc
+        if response.status_code != 200:
+            detail = self._extract_http_error_detail(response)
+            raise ServerResponseError(f"A tanítási riport lekérése sikertelen (HTTP {response.status_code}): {detail}")
+        return self._parse_json_dict(response, f"/api/jobs/{clean_job_id}/report")
+
+    def get_report_image_bytes(self, job_id: str, image_name: str) -> bytes:
+        """Letölti a tanítási riport egyik PNG ábráját bájtfolyamként."""
+        clean_job_id = self._validate_job_id(job_id)
+        if "/" in image_name or "\\" in image_name or ".." in image_name or not image_name.endswith(".png"):
+            raise RemoteClientError(f"Érvénytelen ábranév: {image_name!r}")
+        url = f"{self.base_url}/api/jobs/{clean_job_id}/report/{image_name}"
+        try:
+            response = requests.get(url, timeout=self.timeout, allow_redirects=False)
+        except requests.RequestException as exc:
+            raise self._map_request_exception(exc, f"GET /api/jobs/.../report/{image_name}") from exc
+        if response.status_code != 200 or not response.content:
+            detail = self._extract_http_error_detail(response)
+            raise ServerResponseError(f"Az ábra letöltése sikertelen ({image_name}, HTTP {response.status_code}): {detail}")
+        return response.content
+
     @staticmethod
     def _build_result_dict(
         job_data: Dict[str, Any],
         fallback_session_id: str,
         saved_path: Optional[str],
+        job_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         stats = ParkingRemoteClient._validate_stats(job_data.get("stats"))
         raw_sid = job_data.get("session_id")
         session_id = raw_sid.strip() if isinstance(raw_sid, str) and raw_sid.strip() else fallback_session_id
         return {
+            "job_id": job_id or job_data.get("job_id"),
             "session_id": session_id,
             "total_slots": stats["total_slots"],
             "final_occupied": stats["final_occupied"],
             "final_free": stats["final_free"],
             "frames_processed": stats["frames_processed"],
             "output_path": saved_path,
+            "report_url": job_data.get("report_url"),
         }
