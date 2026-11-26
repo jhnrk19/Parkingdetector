@@ -19,7 +19,7 @@ RUN pip install torch torchvision --index-url https://download.pytorch.org/whl/c
  && pip install "ultralytics>=8.3.0" -r /app/requirements.txt
 
 WORKDIR /app
-COPY server.py vision_pipeline.py /app/
+COPY server.py vision_pipeline.py training_pipeline.py /app/
 
 ENV YOLO_MODEL_PATH=/opt/models/yolov8x-obb.pt \
     YOLO_CONFIG_DIR=/tmp/ultralytics \

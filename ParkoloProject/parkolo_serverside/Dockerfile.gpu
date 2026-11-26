@@ -30,7 +30,7 @@ RUN python -c "import numpy; print('numpy==' + numpy.__version__)" > /tmp/pin.tx
  && python -c "import torch, torchvision, ultralytics, cv2; print('torch', torch.__version__, 'ultralytics', ultralytics.__version__)"
 
 WORKDIR /app
-COPY server.py vision_pipeline.py /app/
+COPY server.py vision_pipeline.py training_pipeline.py /app/
 
 ENV YOLO_MODEL_PATH=/opt/models/yolov8x-obb.pt \
     YOLO_CONFIG_DIR=/tmp/ultralytics \
