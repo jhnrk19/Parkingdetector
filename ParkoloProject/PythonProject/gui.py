@@ -1087,8 +1087,9 @@ class ParkingAppGUI:
             win,
             text="Tanítási riport és ábrák letöltése a távoli AI szerverről...",
             style="Muted.TLabel",
+            wraplength=960,
         )
-        loading_lbl.pack(pady=14)
+        loading_lbl.pack(pady=14, padx=14)
 
         def _fetch():
             try:
@@ -1099,14 +1100,22 @@ class ParkingAppGUI:
                         images_data[img_name] = client.get_report_image_bytes(job_id, img_name)
                     except Exception:
                         pass
-                self._safe_after(lambda: _render(report, images_data))
+                self._safe_after(_render, report, images_data)
             except Exception as exc:
-                self._safe_after(lambda: _render_error(str(exc)))
+                err_msg = str(exc)
+                self._safe_after(_render_error, err_msg)
 
         def _render_error(err: str):
             if not win.winfo_exists():
                 return
-            loading_lbl.config(text=f"Nem sikerült betölteni a riportot: {err}")
+            hint = ""
+            if "404" in err or "409" in err:
+                hint = (
+                    "\n\nTipp: Ellenőrizd, hogy a távoli szerveren (parkolo_serverside) "
+                    "már az új kód fut-e (git pull + szerver/Docker újraindítás), "
+                    "majd futtasd újra az 1. lépést!"
+                )
+            loading_lbl.config(text=f"Nem sikerült betölteni a riportot:\n{err}{hint}")
 
         def _render(report: dict, images_data: dict[str, bytes]):
             if not win.winfo_exists():
