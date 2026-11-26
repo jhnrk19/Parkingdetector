@@ -1,0 +1,45 @@
+# Parkolóhely-foglaltság detektáló szerver – videókártyás változat (NVIDIA, pl. DGX Spark / GB10).
+# Az NVIDIA saját PyTorch-konténerére épül, mert abban a PyTorch a gép videókártyájához (CUDA 13, ARM64 is) van fordítva.
+# Az alapkép nagy (kb. 15-20 GB); ha a Leiratozó már letöltötte, itt nem töltődik le újra.
+
+ARG PYTORCH_IMAGE=nvcr.io/nvidia/pytorch:25.09-py3
+FROM ${PYTORCH_IMAGE}
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
+    DEBIAN_FRONTEND=noninteractive
+
+# ffmpeg: szabványos H.264 MP4; fonts-dejavu-core: magyar ékezetek az információs sávon
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core ca-certificates curl libgl1 libglib2.0-0 \
+ && rm -rf /var/lib/apt/lists/*
+
+# A modell a konténerbe kerül, futás közben nem kell hozzá internet.
+RUN mkdir -p /opt/models \
+ && curl -fsSL -o /opt/models/yolov8x-obb.pt https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8x-obb.pt
+
+# Az Ultralytics a konténer meglévő PyTorch-át használja: a torch-ot és a torchvisiont NEM telepítjük újra (--no-deps),
+# a numpy-t pedig a meglévő verzión tartjuk, különben a pip lecserélhetné a videókártyás összeállítást.
+COPY requirements.txt /app/requirements.txt
+RUN python -c "import numpy; print('numpy==' + numpy.__version__)" > /tmp/pin.txt \
+ && pip install --no-deps "ultralytics>=8.3.0" ultralytics-thop \
+ && pip install -c /tmp/pin.txt -r /app/requirements.txt \
+ && python -c "import torch, torchvision, ultralytics, cv2; print('torch', torch.__version__, 'ultralytics', ultralytics.__version__)"
+
+WORKDIR /app
+COPY server.py vision_pipeline.py /app/
+
+ENV YOLO_MODEL_PATH=/opt/models/yolov8x-obb.pt \
+    YOLO_CONFIG_DIR=/tmp/ultralytics \
+    YOLO_AUTOINSTALL=false \
+    MPLCONFIGDIR=/tmp/matplotlib \
+    PK_DATA=/data
+
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
+  CMD python -c "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/api/health' % os.environ.get('PK_PORT', '8000'), timeout=4)"
+
+CMD ["sh", "-c", "exec uvicorn server:app --host 0.0.0.0 --port ${PK_PORT:-8000} --log-level warning"]

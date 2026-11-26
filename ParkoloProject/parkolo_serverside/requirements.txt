@@ -1,0 +1,14 @@
+# A torch, a torchvision és az ultralytics telepítését a Dockerfile intézi (videókártyás és processzoros változat eltér).
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+opencv-python-headless>=4.9
+pillow>=10
+pyyaml>=6
+requests>=2.31
+scipy>=1.11
+psutil>=5.9
+matplotlib>=3.8
+polars>=1.0
+tqdm>=4.66
+py-cpuinfo>=9

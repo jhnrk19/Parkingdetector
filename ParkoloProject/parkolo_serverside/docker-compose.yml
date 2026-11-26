@@ -1,0 +1,24 @@
+# Parkolóhely-foglaltság detektáló szerver
+# Első alkalommal:   ./docker-setup.sh
+# Indítás/frissítés: docker compose up -d --build
+
+name: parkolo
+
+services:
+  parkolo:
+    build: .
+    image: parkolo:latest
+    container_name: parkolo
+    restart: unless-stopped
+    init: true
+    user: "${PK_UID:?Futtasd előbb: ./docker-setup.sh}:${PK_GID:?Futtasd előbb: ./docker-setup.sh}"
+    ports:
+      - "${PK_PORT:-8000}:${PK_PORT:-8000}"   # sima HTTP, a kliens a http://<gép>:8000 címen éri el
+    environment:
+      HOME: /tmp
+      TZ: ${PK_TZ:-Europe/Budapest}
+      PK_PORT: ${PK_PORT:-8000}
+      PK_KEEP_HOURS: ${PK_KEEP_HOURS:-72}
+    volumes:
+      # feltöltött és eredményvideók (ideiglenesen), a megtanult munkamenetek (tartósan)
+      - ${HOST_HOME}/parkolo/data:/data
